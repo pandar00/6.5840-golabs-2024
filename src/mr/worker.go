@@ -2,15 +2,22 @@ package mr
 
 import (
 	"bufio"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
+	"math"
+	"math/big"
 	"net/rpc"
 	"os"
 	"strings"
 	"time"
 )
+
+var debug = false
 
 // Map functions return a slice of KeyValue.
 type KeyValue struct {
@@ -26,16 +33,40 @@ func ihash(key string) int {
 	return int(h.Sum32() & 0x7fffffff)
 }
 
+// GetID generates random 8 char ID.
+// Hacky implementation to avoid importing external library.
+func GetID() string {
+	// Get random integer
+	maxi := big.NewInt(math.MaxInt64)
+	i, err := rand.Int(rand.Reader, maxi)
+	if err != nil {
+		panic(fmt.Errorf("GetID; %w", err))
+	}
+	// Hash it and get first 8 chars to get random string
+	h := sha256.New()
+	h.Write([]byte(i.String()))
+	return fmt.Sprintf("%x", h.Sum(nil))[:8]
+}
+
 // main/mrworker.go calls this function.
 func Worker(
 	mapf func(string, string) []KeyValue,
 	reducef func(string, []string) string,
 ) {
-	// Your worker implementation here.
+	// Idea: Worker just do what the coordinator tells it to do
+	//       until the coordiator says it's done which then the Worker
+	//       terminates the program
+	// Event loop
+	// LeaseTask
+	//     Task is either
+	//         map task    - single task  => split
+	//         reduce task - singlet task => reduce number
+	//     Conditions:
+	//     1. Available task assigned
+	//     2. No available task assigned. Poll isDone
+	// Do Task
+	// Emit Task Done
 
-	// uncomment to send the Example RPC to the coordinator.
-	// CallExample()
-	//
 	// The worker should put intermediate Map output in files in the
 	// current directory, where your worker can later read them as
 	// input to Reduce tasks.
@@ -50,180 +81,142 @@ func Worker(
 	// correct format". The test script will fail if your implementation
 	// deviates too much from this format.
 
-MapEventLoop:
+	ID := GetID()
 	for true {
-		resp := DoMap()
-		switch resp.Status {
-		case completed:
-			break MapEventLoop
-		case inPrgress:
-			// FIXME: Hack :)
-			// Worker was not able to get a new task because all are in progress but need
-			// to wait for others to finish
-			if resp.Task.Split == "" {
-				continue
-			}
-			// Read contents
-			filename := resp.Task.Split
-			file, err := os.Open(filename)
-			if err != nil {
-				log.Fatalf("cannot open %v; %s", filename, err.Error())
-			}
-			content, err := ioutil.ReadAll(file)
-			if err != nil {
-				log.Fatalf("cannot read %v, %s", filename, err.Error())
-			}
-			file.Close()
-
-			// Write contents to mr-W-R where W=worker_task_num, R=num_reduce
-			var iFiles []IntermediateFile
-			files := make([]*os.File, resp.Task.NReduce)
-			for _, v := range mapf(filename, string(content)) {
-				nReduceTask := ihash(v.Key) % resp.Task.NReduce
-				ifilename := fmt.Sprintf("mr-%d-%d", resp.Task.Worker, nReduceTask)
-
-				if files[nReduceTask] == nil {
-					newF, err := os.OpenFile(ifilename, os.O_CREATE|os.O_WRONLY, 0644)
-					if err != nil {
-						log.Fatalf("failed to open file %s; %s", ifilename, err.Error())
-					}
-					files[nReduceTask] = newF
-
-					iFiles = append(iFiles, IntermediateFile{
-						Worker:    resp.Task.Worker,
-						ReduceNum: nReduceTask,
-						Filename:  ifilename,
-					})
-				}
-
-				f := files[nReduceTask]
-				fmt.Fprintf(f, "%v %v\n", v.Key, v.Value)
-			}
-
-			// Flush
-			for _, f := range files {
-				f.Close()
-			}
-			DoneMap(resp.Task, iFiles)
-
-			// Map phase is done. Continue the loop to poll for more work
-		case idle, unknown:
-			fallthrough
-		default:
-			time.Sleep(1 * time.Second)
+		if IsDone() {
+			break
 		}
-	}
-ReduceEventLoop:
-	for true {
-		resp := DoReduce()
-		switch resp.Status {
-		case completed:
-			break ReduceEventLoop
-		case inPrgress:
-			kv := map[string][]string{}
 
-			// Read all intermidiate for a given reduce task
-			for _, v := range resp.Task.IFiles {
-				// fmt.Printf("worker: reduce %d, reading file %s\n", resp.Task.NumReduce, v.Filename)
-				f, err := os.Open(v.Filename)
-				if err != nil {
-					log.Fatalf("failed to open file %s; %s", v.Filename, err.Error())
-				}
-				scanner := bufio.NewScanner(f)
-				for scanner.Scan() {
-					t := scanner.Text()
-					tokens := strings.Split(t, " ")
-					if _, ok := kv[tokens[0]]; !ok {
-						kv[tokens[0]] = []string{}
-					}
+		task := LeaseTask(ID)
+		if task == nil {
+			time.Sleep(time.Second)
+			continue
+		}
 
-					kv[tokens[0]] = append(kv[tokens[0]], tokens[1])
-				}
-				f.Close()
-			}
-
-			// Call reduce for each of the key and write to reduce file
-			oFilename := fmt.Sprintf("mr-out-%d", resp.Task.NumReduce)
-			outF, err := os.OpenFile(oFilename, os.O_CREATE|os.O_WRONLY, 0644)
-			if err != nil {
-				log.Fatalf("failed to open file %s; %s", oFilename, err.Error())
-			}
-			for k, v := range kv {
-				rVal := reducef(k, v)
-				fmt.Fprintf(outF, "%v %v\n", k, rVal)
-			}
-			outF.Close()
-			DoneReduce(resp.Task)
-		case idle, unknown:
-			fallthrough
+		switch t := task.(type) {
+		case MapTask:
+			DoMap(&t, mapf)
+			TaskDone(ID, t)
+		case ReduceTask:
+			DoReduce(&t, reducef)
+			TaskDone(ID, t)
 		default:
-			time.Sleep(1 * time.Second)
+			panic(fmt.Errorf("unknown type %T", task))
 		}
 	}
 }
 
-// example function to show how to make an RPC call to the coordinator.
-//
-// the RPC argument and reply types are defined in rpc.go.
-func DoMap() DoMapResp {
-	args := DoMapReq{}
-	reply := DoMapResp{}
-
-	ok := call("Coordinator.DoMap", &args, &reply)
-	if ok {
-		// b, _ := json.Marshal(&reply)
-		// fmt.Println(string(b))
-	} else {
-		fmt.Print("call failed!\n")
+func DoMap(t *MapTask, f func(string, string) []KeyValue) {
+	filename := t.Split
+	file, err := os.Open(filename)
+	if err != nil {
+		log.Fatalf("DoMap(); cannot open %v; %s", filename, err.Error())
 	}
-	return reply
+	defer file.Close()
+
+	content, err := ioutil.ReadAll(file)
+	if err != nil {
+		log.Fatalf("DoMap(); cannot read %v, %s", filename, err.Error())
+	}
+
+	// Write contents to mr-W-R where W=worker_task_num, R=num_reduce
+	var iFiles []IFile
+	files := make([]*os.File, t.NReduce)
+	for _, v := range f(filename, string(content)) {
+		nReduceTask := ihash(v.Key) % t.NReduce
+		ifname := fmt.Sprintf("mr-%s-%d", t.Leasee, nReduceTask)
+
+		if files[nReduceTask] == nil {
+			newF, err := os.OpenFile(ifname, os.O_CREATE|os.O_WRONLY, 0644)
+			if err != nil {
+				log.Fatalf("DoMap(); failed to open file %s; %s", ifname, err.Error())
+			}
+			defer newF.Close()
+
+			files[nReduceTask] = newF
+
+			iFiles = append(iFiles, IFile{
+				ReduceNum: nReduceTask,
+				Name:      ifname,
+			})
+		}
+
+		f := files[nReduceTask]
+		fmt.Fprintf(f, "%v %v\n", v.Key, v.Value)
+	}
+	t.IFiles = iFiles
 }
 
-func DoneMap(t MapTask, iFiles []IntermediateFile) DoneMapResp {
-	args := DoneMapReq{
-		Task:   t,
-		IFiles: iFiles,
-	}
-	reply := DoneMapResp{}
+func DoReduce(t *ReduceTask, f func(string, []string) string) {
+	kv := map[string][]string{}
 
-	ok := call("Coordinator.DoneMap", &args, &reply)
-	if ok {
-		// b, _ := json.Marshal(&reply)
-		// fmt.Println(string(b))
-	} else {
-		fmt.Print("call failed!\n")
+	// Read all intermidiate for a given reduce task
+	for _, v := range t.IFiles {
+		f, err := os.Open(v.Name)
+		if err != nil {
+			log.Fatalf("DoReduce(); failed to open file %s; %s", v.Name, err.Error())
+		}
+		defer f.Close()
+
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			t := scanner.Text()
+			tokens := strings.Split(t, " ")
+			if _, ok := kv[tokens[0]]; !ok {
+				kv[tokens[0]] = []string{}
+			}
+			fmt.Println(t)
+			kv[tokens[0]] = append(kv[tokens[0]], tokens[1])
+		}
+		f.Close()
 	}
-	return reply
+
+	// Call reduce for each of the key and write to reduce file
+	filename := fmt.Sprintf("mr-out-%d", t.NumReduce)
+	outF, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		log.Fatalf("DoReduce(); failed to open file %s; %s", filename, err.Error())
+	}
+	defer outF.Close()
+
+	for k, v := range kv {
+		rVal := f(k, v)
+		fmt.Fprintf(outF, "%v %v\n", k, rVal)
+	}
 }
 
-func DoReduce() DoReduceResp {
-	args := DoReduceReq{}
-	reply := DoReduceResp{}
-
-	ok := call("Coordinator.DoReduce", &args, &reply)
-	if ok {
-		// b, _ := json.Marshal(&reply)
-		// fmt.Println(string(b))
-	} else {
-		fmt.Print("call failed!\n")
+func LeaseTask(workerID string) interface{} {
+	args := LeaseTaskReq{
+		WorkerID: workerID,
 	}
-	return reply
+	reply := LeaseTaskResp{}
+	ok := call("Coordinator.LeaseTask", &args, &reply)
+	if !ok {
+		fmt.Println("LeaseTask() call failed!")
+	}
+	return reply.Task
 }
 
-func DoneReduce(t ReduceTask) DoneReduceResp {
-	args := DoneReduceReq{
-		Task: t,
+func TaskDone(workerID string, task interface{}) {
+	args := TaskDoneReq{
+		WorkerID: workerID,
+		Task:     task,
 	}
-	reply := DoneReduceResp{}
+	reply := TaskDoneResp{}
+	ok := call("Coordinator.TaskDone", &args, &reply)
+	if !ok {
+		fmt.Println("TaskDone() call failed!")
+	}
+}
 
-	ok := call("Coordinator.DoneReduce", &args, &reply)
-	if ok {
-		// b, _ := json.Marshal(&reply)
-		// fmt.Println(string(b))
-	} else {
-		fmt.Print("call failed!\n")
+func IsDone() bool {
+	args := IsDoneReq{}
+	reply := IsDoneResp{}
+	ok := call("Coordinator.IsDone", &args, &reply)
+	if !ok {
+		fmt.Println("IsDone() call failed!")
 	}
-	return reply
+	return reply.Value
 }
 
 // send an RPC request to the coordinator, wait for the response.
@@ -238,17 +231,23 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	}
 	defer c.Close()
 
-	// b, _ := json.Marshal(args)
-	// fmt.Printf("Call %s; %s\n", rpcname, string(b))
+	if debug {
+		b, _ := json.MarshalIndent(args, "", "    ")
+		fmt.Printf("Call %s; Args: %s\n", rpcname, string(b))
+	}
 
 	err = c.Call(rpcname, args, reply)
+
+	if debug {
+		b, _ := json.MarshalIndent(reply, "", "    ")
+		fmt.Printf("Call %s; Reply: %s\n", rpcname, string(b))
+	}
+
 	if err == nil {
 		return true
 	}
 
-	// b, _ = json.Marshal(reply)
-	// fmt.Printf("Call %s; %s\n", rpcname, string(b))
+	fmt.Printf("Call %s failed; %s\n", rpcname, err.Error())
 
-	// fmt.Println(err)
 	return false
 }

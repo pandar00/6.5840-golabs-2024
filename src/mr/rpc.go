@@ -7,48 +7,98 @@ package mr
 //
 
 import (
+	"encoding/gob"
 	"os"
 	"strconv"
+	"time"
 )
+
+func init() {
+	gob.Register(MapTask{})
+	gob.Register(ReduceTask{})
+}
 
 //
 // example to show how to declare the arguments
 // and reply for an RPC.
 //
 
-type DoMapReq struct{}
-
-type DoMapResp struct {
-	Task   MapTask
-	Status Status
+type LeaseTaskReq struct {
+	WorkerID string
 }
 
-type IntermediateFile struct {
-	Worker    int
+type LeaseTaskResp struct {
+	// Task may be empty if coordinator was unable to allocate a task.
+	Task interface{}
+}
+
+type TaskDoneReq struct {
+	Task     interface{}
+	WorkerID string
+}
+
+type TaskDoneResp struct{}
+
+type IsDoneReq struct{}
+
+type IsDoneResp struct {
+	// true=done, false=not done
+	Value bool
+}
+
+type Status string
+
+const (
+	// Idle is the initial state
+	Idle       Status = "idle"
+	InProgress Status = "in_progress"
+	Done       Status = "done"
+)
+
+// IFile is the intermediate files
+type IFile struct {
 	ReduceNum int
-	Filename  string
+	Name      string
 }
 
-type DoneMapReq struct {
-	Task   MapTask
-	IFiles []IntermediateFile
-}
-type DoneMapResp struct{}
-
-type DoReduceReq struct{}
-
-type DoReduceResp struct {
-	Task   ReduceTask
+type MapTask struct {
+	// Split is the work to be done
+	// Effectively ID of the map task
+	Split  string
 	Status Status
+	Leasee string
+
+	// IFiles is the resulting intermediate files
+	// Set only after map task is completed
+	IFiles []IFile
+
+	// Number of reduce to be done
+	NReduce int
+
+	UpdateTime time.Time
+	ExpireTime time.Time
 }
 
-type DoneReduceReq struct {
-	Task ReduceTask
+func (t *MapTask) IsExpired() bool {
+	return time.Now().After(t.ExpireTime)
 }
 
-type DoneReduceResp struct{}
+type ReduceTask struct {
+	// Reduce task number. Effectively the ID
+	NumReduce int
+	Status    Status
+	Leasee    string
 
-// Add your RPC definitions here.
+	// Intermediate files to reduce
+	IFiles []IFile
+
+	UpdateTime time.Time
+	ExpireTime time.Time
+}
+
+func (t *ReduceTask) IsExpired() bool {
+	return time.Now().After(t.ExpireTime)
+}
 
 // Cook up a unique-ish UNIX-domain socket name
 // in /var/tmp, for the coordinator.
