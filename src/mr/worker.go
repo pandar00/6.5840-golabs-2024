@@ -78,18 +78,18 @@ MapEventLoop:
 				nReduceTask := ihash(v.Key) % resp.Task.NReduce
 				ifilename := fmt.Sprintf("mr-%d-%d", resp.Task.Worker, nReduceTask)
 
-				iFiles = append(iFiles, IntermediateFile{
-					Worker:    resp.Task.Worker,
-					ReduceNum: nReduceTask,
-					Filename:  ifilename,
-				})
-
 				if files[nReduceTask] == nil {
 					newF, err := os.OpenFile(ifilename, os.O_CREATE|os.O_WRONLY, 0644)
 					if err != nil {
 						log.Fatalf("failed to open file %s; %s", ifilename, err.Error())
 					}
 					files[nReduceTask] = newF
+
+					iFiles = append(iFiles, IntermediateFile{
+						Worker:    resp.Task.Worker,
+						ReduceNum: nReduceTask,
+						Filename:  ifilename,
+					})
 				}
 
 				f := files[nReduceTask]
@@ -120,6 +120,7 @@ ReduceEventLoop:
 
 			// Read all intermidiate for a given reduce task
 			for _, v := range resp.Task.IFiles {
+				fmt.Printf("worker: reduce %d, reading file %s\n", resp.Task.NumReduce, v.Filename)
 				f, err := os.Open(v.Filename)
 				if err != nil {
 					log.Fatalf("failed to open file %s; %s", v.Filename, err.Error())
@@ -167,9 +168,9 @@ func DoMap() DoMapResp {
 	ok := call("Coordinator.DoMap", &args, &reply)
 	if ok {
 		b, _ := json.Marshal(&reply)
-		fmt.Printf(string(b))
+		fmt.Println(string(b))
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Print("call failed!\n")
 	}
 	return reply
 }
@@ -184,9 +185,9 @@ func DoneMap(t MapTask, iFiles []IntermediateFile) DoneMapResp {
 	ok := call("Coordinator.DoneMap", &args, &reply)
 	if ok {
 		b, _ := json.Marshal(&reply)
-		fmt.Printf(string(b))
+		fmt.Println(string(b))
 	} else {
-		fmt.Printf("call failed!\n")
+		fmt.Print("call failed!\n")
 	}
 	return reply
 }
@@ -198,7 +199,7 @@ func DoReduce() DoReduceResp {
 	ok := call("Coordinator.DoReduce", &args, &reply)
 	if ok {
 		b, _ := json.Marshal(&reply)
-		fmt.Printf(string(b))
+		fmt.Println(string(b))
 	} else {
 		fmt.Print("call failed!\n")
 	}
@@ -206,7 +207,9 @@ func DoReduce() DoReduceResp {
 }
 
 func DoneReduce(t ReduceTask) DoneReduceResp {
-	args := DoneReduceReq{}
+	args := DoneReduceReq{
+		Task: t,
+	}
 	reply := DoneReduceResp{}
 
 	ok := call("Coordinator.DoneReduce", &args, &reply)

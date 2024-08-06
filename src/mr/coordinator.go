@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -133,25 +134,31 @@ func (c *Coordinator) DoneMap(args *DoneMapReq, reply *DoneMapResp) error {
 			v.Status = completed
 			v.UpdateTime = time.Now()
 
-			// Add all intermediate files.
-			// ReduceNum is the reduce task ID
-			for _, v := range args.IFiles {
-				if _, ok := c.ReduceTasks[v.ReduceNum]; !ok {
-					t := ReduceTask{
-						Status:     idle,
-						IFiles:     []IntermediateFile{},
-						NumReduce:  v.ReduceNum,
-						UpdateTime: time.Now(),
-						ExpireTime: time.Time{},
-					}
-					c.ReduceTasks[v.ReduceNum] = &t
-				}
-
-				c.ReduceTasks[v.ReduceNum].IFiles = append(c.ReduceTasks[v.ReduceNum].IFiles, v)
-			}
-
 		}
 	}
+
+	// Add all intermediate files.
+	// ReduceNum is the reduce task ID
+	if c.ReduceTasks == nil {
+		c.ReduceTasks = map[int]*ReduceTask{}
+	}
+
+	fmt.Printf("Coordinator: files %#v\b", args.IFiles)
+	for _, v := range args.IFiles {
+		if _, ok := c.ReduceTasks[v.ReduceNum]; !ok {
+			t := ReduceTask{
+				Status:     idle,
+				IFiles:     []IntermediateFile{},
+				NumReduce:  v.ReduceNum,
+				UpdateTime: time.Now(),
+				ExpireTime: time.Time{},
+			}
+			c.ReduceTasks[v.ReduceNum] = &t
+		}
+
+		c.ReduceTasks[v.ReduceNum].IFiles = append(c.ReduceTasks[v.ReduceNum].IFiles, v)
+	}
+
 	return nil
 }
 
@@ -165,14 +172,31 @@ func (c *Coordinator) DoReduce(args *DoReduceReq, reply *DoReduceResp) error {
 			v.ExpireTime = time.Now().Add(c.leaseDuration)
 
 			reply.Task = *v
+			reply.Status = inPrgress
+			break
 		}
 	}
+
+	nrDone := 0
+	for _, v := range c.ReduceTasks {
+		if v.Status == completed {
+			nrDone += 1
+		}
+	}
+
+	if nrDone == len(c.ReduceTasks) {
+		reply.Status = completed
+	}
+
 	return nil
 }
 
 func (c *Coordinator) DoneReduce(args *DoneReduceReq, reply *DoneReduceResp) error {
 	c.m.Lock()
 	defer c.m.Unlock()
+
+	b, _ := json.Marshal(args)
+	fmt.Printf("DoneReduce: %s\n", string(b))
 
 	t := c.ReduceTasks[args.Task.NumReduce]
 	t.Status = completed
@@ -224,6 +248,18 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 		m:             &sync.Mutex{},
 		leaseDuration: 1 * time.Minute,
 	}
+
+	// go func() {
+	// 	tker := time.NewTicker(time.Second)
+	// 	defer tker.Stop()
+	// 	for true {
+	// 		select {
+	// 		case <-tker.C:
+	// 			b, _ := json.Marshal(c)
+	// 			fmt.Printf("Coordinator %s\n", string(b))
+	// 		}
+	// 	}
+	// }()
 
 	for _, v := range files {
 		c.MapTasks = append(c.MapTasks, &MapTask{
