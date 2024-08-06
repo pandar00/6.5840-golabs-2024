@@ -1,7 +1,6 @@
 package mr
 
 import (
-	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -143,7 +142,7 @@ func (c *Coordinator) DoneMap(args *DoneMapReq, reply *DoneMapResp) error {
 		c.ReduceTasks = map[int]*ReduceTask{}
 	}
 
-	fmt.Printf("Coordinator: files %#v\b", args.IFiles)
+	// fmt.Printf("Coordinator: files %#v\b", args.IFiles)
 	for _, v := range args.IFiles {
 		if _, ok := c.ReduceTasks[v.ReduceNum]; !ok {
 			t := ReduceTask{
@@ -167,13 +166,13 @@ func (c *Coordinator) DoReduce(args *DoReduceReq, reply *DoReduceResp) error {
 	defer c.m.Unlock()
 
 	for _, v := range c.ReduceTasks {
-		if v.Status == idle {
+		if v.Status == idle || (v.Status == inPrgress && time.Now().After(v.ExpireTime)) {
 			v.Status = inPrgress
 			v.ExpireTime = time.Now().Add(c.leaseDuration)
 
 			reply.Task = *v
 			reply.Status = inPrgress
-			break
+			return nil
 		}
 	}
 
@@ -195,8 +194,8 @@ func (c *Coordinator) DoneReduce(args *DoneReduceReq, reply *DoneReduceResp) err
 	c.m.Lock()
 	defer c.m.Unlock()
 
-	b, _ := json.Marshal(args)
-	fmt.Printf("DoneReduce: %s\n", string(b))
+	// b, _ := json.Marshal(args)
+	// fmt.Printf("DoneReduce: %s\n", string(b))
 
 	t := c.ReduceTasks[args.Task.NumReduce]
 	t.Status = completed
@@ -222,6 +221,8 @@ func (c *Coordinator) server() {
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 func (c *Coordinator) Done() bool {
+	c.m.Lock()
+	defer c.m.Unlock()
 	// Coordinator is done when all tasks are finished
 	nMDone, nRDone := 0, 0
 	for _, v := range c.MapTasks {
@@ -246,7 +247,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	c := Coordinator{
 		NumReduce:     nReduce,
 		m:             &sync.Mutex{},
-		leaseDuration: 1 * time.Minute,
+		leaseDuration: 10 * time.Second,
 	}
 
 	// go func() {
@@ -262,6 +263,7 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 	// }()
 
 	for _, v := range files {
+		// fmt.Println(v)
 		c.MapTasks = append(c.MapTasks, &MapTask{
 			Status:     idle,
 			NReduce:    c.NumReduce,

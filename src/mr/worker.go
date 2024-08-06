@@ -2,14 +2,12 @@ package mr
 
 import (
 	"bufio"
-	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
 	"log"
 	"net/rpc"
 	"os"
-	"reflect"
 	"strings"
 	"time"
 )
@@ -59,15 +57,21 @@ MapEventLoop:
 		case completed:
 			break MapEventLoop
 		case inPrgress:
+			// FIXME: Hack :)
+			// Worker was not able to get a new task because all are in progress but need
+			// to wait for others to finish
+			if resp.Task.Split == "" {
+				continue
+			}
 			// Read contents
 			filename := resp.Task.Split
 			file, err := os.Open(filename)
 			if err != nil {
-				log.Fatalf("cannot open %v", filename)
+				log.Fatalf("cannot open %v; %s", filename, err.Error())
 			}
 			content, err := ioutil.ReadAll(file)
 			if err != nil {
-				log.Fatalf("cannot read %v", filename)
+				log.Fatalf("cannot read %v, %s", filename, err.Error())
 			}
 			file.Close()
 
@@ -120,7 +124,7 @@ ReduceEventLoop:
 
 			// Read all intermidiate for a given reduce task
 			for _, v := range resp.Task.IFiles {
-				fmt.Printf("worker: reduce %d, reading file %s\n", resp.Task.NumReduce, v.Filename)
+				// fmt.Printf("worker: reduce %d, reading file %s\n", resp.Task.NumReduce, v.Filename)
 				f, err := os.Open(v.Filename)
 				if err != nil {
 					log.Fatalf("failed to open file %s; %s", v.Filename, err.Error())
@@ -167,8 +171,8 @@ func DoMap() DoMapResp {
 
 	ok := call("Coordinator.DoMap", &args, &reply)
 	if ok {
-		b, _ := json.Marshal(&reply)
-		fmt.Println(string(b))
+		// b, _ := json.Marshal(&reply)
+		// fmt.Println(string(b))
 	} else {
 		fmt.Print("call failed!\n")
 	}
@@ -184,8 +188,8 @@ func DoneMap(t MapTask, iFiles []IntermediateFile) DoneMapResp {
 
 	ok := call("Coordinator.DoneMap", &args, &reply)
 	if ok {
-		b, _ := json.Marshal(&reply)
-		fmt.Println(string(b))
+		// b, _ := json.Marshal(&reply)
+		// fmt.Println(string(b))
 	} else {
 		fmt.Print("call failed!\n")
 	}
@@ -198,8 +202,8 @@ func DoReduce() DoReduceResp {
 
 	ok := call("Coordinator.DoReduce", &args, &reply)
 	if ok {
-		b, _ := json.Marshal(&reply)
-		fmt.Println(string(b))
+		// b, _ := json.Marshal(&reply)
+		// fmt.Println(string(b))
 	} else {
 		fmt.Print("call failed!\n")
 	}
@@ -214,8 +218,8 @@ func DoneReduce(t ReduceTask) DoneReduceResp {
 
 	ok := call("Coordinator.DoneReduce", &args, &reply)
 	if ok {
-		b, _ := json.Marshal(&reply)
-		fmt.Println(string(b))
+		// b, _ := json.Marshal(&reply)
+		// fmt.Println(string(b))
 	} else {
 		fmt.Print("call failed!\n")
 	}
@@ -234,14 +238,17 @@ func call(rpcname string, args interface{}, reply interface{}) bool {
 	}
 	defer c.Close()
 
-	fmt.Printf("calling %s, args %s, reply %s\n", rpcname,
-		reflect.TypeOf(args).Name(),
-		reflect.TypeOf(reply).Name())
+	// b, _ := json.Marshal(args)
+	// fmt.Printf("Call %s; %s\n", rpcname, string(b))
+
 	err = c.Call(rpcname, args, reply)
 	if err == nil {
 		return true
 	}
 
-	fmt.Println(err)
+	// b, _ = json.Marshal(reply)
+	// fmt.Printf("Call %s; %s\n", rpcname, string(b))
+
+	// fmt.Println(err)
 	return false
 }
