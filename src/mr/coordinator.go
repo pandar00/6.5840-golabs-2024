@@ -90,6 +90,7 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 		// Mark map task as done and update other fields
 		t.Status = Done
 		t.UpdateTime = time.Now()
+		t.ExpireTime = time.Now().Add(c.leaseDuration)
 		t.IFiles = rt.IFiles
 
 		// Create reduce tasks
@@ -118,6 +119,7 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 		// Mark reduce task as done and update other fields
 		t.Status = Done
 		t.UpdateTime = time.Now()
+		t.ExpireTime = time.Now().Add(c.leaseDuration)
 
 	default:
 		panic(fmt.Errorf("unknown type %T", req.Task))

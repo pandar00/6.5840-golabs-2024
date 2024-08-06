@@ -141,8 +141,7 @@ func DoMap(t *MapTask, f func(string, string) []KeyValue) {
 			})
 		}
 
-		f := files[nReduceTask]
-		fmt.Fprintf(f, "%v %v\n", v.Key, v.Value)
+		fmt.Fprintf(files[nReduceTask], "%v %v\n", v.Key, v.Value)
 	}
 	t.IFiles = iFiles
 }
@@ -160,12 +159,12 @@ func DoReduce(t *ReduceTask, f func(string, []string) string) {
 
 		scanner := bufio.NewScanner(f)
 		for scanner.Scan() {
-			t := scanner.Text()
-			tokens := strings.Split(t, " ")
+			line := scanner.Text()
+			tokens := strings.Split(line, " ")
 			if _, ok := kv[tokens[0]]; !ok {
 				kv[tokens[0]] = []string{}
 			}
-			fmt.Println(t)
+			fmt.Println("DEBUG:" + v.Name + ":'" + line + "'")
 			kv[tokens[0]] = append(kv[tokens[0]], tokens[1])
 		}
 		f.Close()
