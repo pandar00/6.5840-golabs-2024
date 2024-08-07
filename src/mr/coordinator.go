@@ -37,8 +37,10 @@ type Coordinator struct {
 	// key=reduce num
 	ReduceTasks map[int]*ReduceTask
 
+	// Every RPC operation is locked to guarantee mutual exclusiveness
 	m *sync.Mutex
 
+	// Duration until coordinate assumes the worker is dead
 	leaseDuration time.Duration
 }
 
@@ -46,6 +48,14 @@ func (c *Coordinator) LeaseTask(req *LeaseTaskReq, resp *LeaseTaskResp) error {
 	c.m.Lock()
 	defer c.m.Unlock()
 
+	// TODO: If a worker dies after lease it can die in either map or reduce phase.
+	//       In the case worker dies in reduce phase, the coordinator needs to
+	//       reset any ongoing resduce task and redo the map phase of the dead worker
+	//       because, strictly speaking, intermediate files are local to the worker.
+	//       However, the code still works because we're running everything locally
+	//       which preserves the intermeidate result even after the worker dies.
+
+	nmDone := 0
 	// Iterate map or reduce tasks
 	for _, t := range c.MapTasks {
 		if t.Status == Idle || t.IsExpired() {
@@ -55,8 +65,18 @@ func (c *Coordinator) LeaseTask(req *LeaseTaskReq, resp *LeaseTaskResp) error {
 			t.ExpireTime = time.Now().Add(c.leaseDuration)
 
 			resp.Task = t
+			resp.HasTask = true
 			return nil
 		}
+
+		if t.Status == Done {
+			nmDone += 1
+		}
+	}
+
+	// Wait handing out reduce tasks until map tasks are all finished
+	if nmDone != len(c.MapTasks) {
+		return nil
 	}
 
 	for _, t := range c.ReduceTasks {
@@ -67,6 +87,7 @@ func (c *Coordinator) LeaseTask(req *LeaseTaskReq, resp *LeaseTaskResp) error {
 			t.ExpireTime = time.Now().Add(c.leaseDuration)
 
 			resp.Task = t
+			resp.HasTask = true
 			return nil
 		}
 	}
@@ -90,13 +111,22 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 		// Mark map task as done and update other fields
 		t.Status = Done
 		t.UpdateTime = time.Now()
-		t.ExpireTime = time.Now().Add(c.leaseDuration)
 		t.IFiles = rt.IFiles
 
 		// Create reduce tasks
 		for _, v := range t.IFiles {
 			if reduceT, ok := c.ReduceTasks[v.ReduceNum]; ok {
-				reduceT.IFiles = append(reduceT.IFiles, v)
+				// Existing reduce task may already have ifiles for a given worker
+				// if worker is reassigned to a map task so only add if ifiles are new
+				found := false
+				for _, ifile := range reduceT.IFiles {
+					if ifile.Name == v.Name {
+						found = true
+					}
+				}
+				if !found {
+					reduceT.IFiles = append(reduceT.IFiles, v)
+				}
 			} else {
 				reduceT := ReduceTask{
 					NumReduce:  v.ReduceNum,
@@ -119,7 +149,6 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 		// Mark reduce task as done and update other fields
 		t.Status = Done
 		t.UpdateTime = time.Now()
-		t.ExpireTime = time.Now().Add(c.leaseDuration)
 
 	default:
 		panic(fmt.Errorf("unknown type %T", req.Task))

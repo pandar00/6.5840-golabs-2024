@@ -40,7 +40,7 @@ func GetID() string {
 	maxi := big.NewInt(math.MaxInt64)
 	i, err := rand.Int(rand.Reader, maxi)
 	if err != nil {
-		panic(fmt.Errorf("GetID; %w", err))
+		log.Fatal(fmt.Errorf("GetID; %w", err))
 	}
 	// Hash it and get first 8 chars to get random string
 	h := sha256.New()
@@ -87,8 +87,8 @@ func Worker(
 			break
 		}
 
-		task := LeaseTask(ID)
-		if task == nil {
+		task, hasTask := LeaseTask(ID)
+		if !hasTask {
 			time.Sleep(time.Second)
 			continue
 		}
@@ -101,7 +101,7 @@ func Worker(
 			DoReduce(&t, reducef)
 			TaskDone(ID, t)
 		default:
-			panic(fmt.Errorf("unknown type %T", task))
+			log.Fatal(fmt.Errorf("unknown type %T", task))
 		}
 	}
 }
@@ -119,15 +119,16 @@ func DoMap(t *MapTask, f func(string, string) []KeyValue) {
 		log.Fatalf("DoMap(); cannot read %v, %s", filename, err.Error())
 	}
 
-	// Write contents to mr-W-R where W=worker_task_num, R=num_reduce
 	var iFiles []IFile
 	files := make([]*os.File, t.NReduce)
-	for _, v := range f(filename, string(content)) {
-		nReduceTask := ihash(v.Key) % t.NReduce
+	// Iterate list of key values
+	for _, kv := range f(filename, string(content)) {
+		nReduceTask := ihash(kv.Key) % t.NReduce
 		ifname := fmt.Sprintf("mr-%s-%d", t.Leasee, nReduceTask)
 
 		if files[nReduceTask] == nil {
-			newF, err := os.OpenFile(ifname, os.O_CREATE|os.O_WRONLY, 0644)
+			// Worker can work on more than one file. Append if the file already exists
+			newF, err := os.OpenFile(ifname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 			if err != nil {
 				log.Fatalf("DoMap(); failed to open file %s; %s", ifname, err.Error())
 			}
@@ -141,7 +142,7 @@ func DoMap(t *MapTask, f func(string, string) []KeyValue) {
 			})
 		}
 
-		fmt.Fprintf(files[nReduceTask], "%v %v\n", v.Key, v.Value)
+		fmt.Fprintf(files[nReduceTask], "%s %s\n", kv.Key, kv.Value)
 	}
 	t.IFiles = iFiles
 }
@@ -164,10 +165,8 @@ func DoReduce(t *ReduceTask, f func(string, []string) string) {
 			if _, ok := kv[tokens[0]]; !ok {
 				kv[tokens[0]] = []string{}
 			}
-			fmt.Println("DEBUG:" + v.Name + ":'" + line + "'")
 			kv[tokens[0]] = append(kv[tokens[0]], tokens[1])
 		}
-		f.Close()
 	}
 
 	// Call reduce for each of the key and write to reduce file
@@ -184,7 +183,7 @@ func DoReduce(t *ReduceTask, f func(string, []string) string) {
 	}
 }
 
-func LeaseTask(workerID string) interface{} {
+func LeaseTask(workerID string) (interface{}, bool) {
 	args := LeaseTaskReq{
 		WorkerID: workerID,
 	}
@@ -193,7 +192,7 @@ func LeaseTask(workerID string) interface{} {
 	if !ok {
 		fmt.Println("LeaseTask() call failed!")
 	}
-	return reply.Task
+	return reply.Task, reply.HasTask
 }
 
 func TaskDone(workerID string, task interface{}) {

@@ -29,7 +29,8 @@ type LeaseTaskReq struct {
 
 type LeaseTaskResp struct {
 	// Task may be empty if coordinator was unable to allocate a task.
-	Task interface{}
+	Task    interface{}
+	HasTask bool
 }
 
 type TaskDoneReq struct {
@@ -80,7 +81,7 @@ type MapTask struct {
 }
 
 func (t *MapTask) IsExpired() bool {
-	return time.Now().After(t.ExpireTime)
+	return t.Status == InProgress && time.Now().After(t.ExpireTime)
 }
 
 type ReduceTask struct {
@@ -97,7 +98,7 @@ type ReduceTask struct {
 }
 
 func (t *ReduceTask) IsExpired() bool {
-	return time.Now().After(t.ExpireTime)
+	return t.Status == InProgress && time.Now().After(t.ExpireTime)
 }
 
 // Cook up a unique-ish UNIX-domain socket name
