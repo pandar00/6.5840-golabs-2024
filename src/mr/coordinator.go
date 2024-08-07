@@ -102,8 +102,7 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 	case MapTask:
 		t := c.MapTasks[rt.Split]
 
-		//  NOTE: Ignore if the rogue worker is detected.
-		//        Coordinator will reassign.
+		// Ignore if the rogue worker is detected. Coordinator will reassign.
 		if t.Status != InProgress || t.IsExpired() {
 			return nil
 		}
@@ -128,6 +127,7 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 					reduceT.IFiles = append(reduceT.IFiles, v)
 				}
 			} else {
+				// No reduce task found. Create a new one.
 				reduceT := ReduceTask{
 					NumReduce:  v.ReduceNum,
 					Status:     Idle,
@@ -140,8 +140,7 @@ func (c *Coordinator) TaskDone(req *TaskDoneReq, resp *TaskDoneResp) error {
 	case ReduceTask:
 		t := c.ReduceTasks[rt.NumReduce]
 
-		//  NOTE: Ignore if the rogue worker is detected.
-		//        Coordinator will reassign.
+		// Ignore if the rogue worker is detected. Coordinator will reassign.
 		if t.Status != InProgress || t.IsExpired() {
 			return nil
 		}

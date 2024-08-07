@@ -13,15 +13,11 @@ import (
 	"time"
 )
 
+// Some field types are interface{}, so registration is required for gob.
 func init() {
 	gob.Register(MapTask{})
 	gob.Register(ReduceTask{})
 }
-
-//
-// example to show how to declare the arguments
-// and reply for an RPC.
-//
 
 type LeaseTaskReq struct {
 	WorkerID string

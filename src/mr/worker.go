@@ -17,6 +17,7 @@ import (
 	"time"
 )
 
+// Debug flag to output all communciation
 var debug = false
 
 // Map functions return a slice of KeyValue.
