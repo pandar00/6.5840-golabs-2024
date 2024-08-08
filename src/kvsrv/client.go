@@ -8,7 +8,9 @@ import (
 )
 
 type Clerk struct {
-	server *labrpc.ClientEnd
+	server     *labrpc.ClientEnd
+	id         int64
+	currSeqNum int64
 	// You will have to modify this struct.
 }
 
@@ -22,6 +24,8 @@ func nrand() int64 {
 func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.server = server
+	ck.id = nrand()
+	ck.currSeqNum = 1
 	// You'll have to add code here.
 	return ck
 }
@@ -38,10 +42,19 @@ func MakeClerk(server *labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 func (ck *Clerk) Get(key string) string {
 	args := &GetArgs{
-		Key: key,
+		Key:      key,
+		ClientID: ck.id,
+		SeqNum:   ck.currSeqNum,
 	}
+	ck.currSeqNum += 1
 	reply := &GetReply{}
-	ck.server.Call("KVServer.Get", args, reply)
+	for true {
+		ok := ck.server.Call("KVServer.Get", args, reply)
+		// no need to retry if ok
+		if ok {
+			break
+		}
+	}
 	return reply.Value
 }
 
@@ -56,11 +69,20 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) string {
 	// You will have to modify this function.
 	args := &PutAppendArgs{
-		Key:   key,
-		Value: value,
+		Key:      key,
+		Value:    value,
+		ClientID: ck.id,
+		SeqNum:   ck.currSeqNum,
 	}
+	ck.currSeqNum += 1
 	reply := &PutAppendReply{}
-	ck.server.Call("KVServer."+op, args, reply)
+	for true {
+		ok := ck.server.Call("KVServer."+op, args, reply)
+		// no need to retry if ok
+		if ok {
+			break
+		}
+	}
 	return reply.Value
 }
 
