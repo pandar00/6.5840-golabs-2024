@@ -29,6 +29,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
+	// Get() does not need to deduplicate request. Not sure why
 	// if seen, value := kv.deduplicate(args.ClientID, args.SeqNum); seen {
 	// 	reply.Value = value
 	// 	return
