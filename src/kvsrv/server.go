@@ -15,7 +15,7 @@ func DPrintf(format string, a ...interface{}) (n int, err error) {
 }
 
 type LogEntry struct {
-	SeqNum int64
+	SeqNum int
 	// Value after the operation
 	Value string
 }
@@ -29,17 +29,15 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	kv.mu.Lock()
 	defer kv.mu.Unlock()
 
-	if seen, value := kv.deduplicate(args.ClientID, args.SeqNum); seen {
-		reply.Value = value
-		return
-	}
+	// if seen, value := kv.deduplicate(args.ClientID, args.SeqNum); seen {
+	// 	reply.Value = value
+	// 	return
+	// }
 
 	reply.Value = kv.store[args.Key]
 
-	kv.clientLog[args.ClientID] = &LogEntry{
-		SeqNum: args.SeqNum,
-		Value:  reply.Value,
-	}
+	// kv.clientLog[args.ClientID].SeqNum = args.SeqNum
+	// kv.clientLog[args.ClientID].Value = reply.Value
 }
 
 func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
@@ -53,10 +51,8 @@ func (kv *KVServer) Put(args *PutAppendArgs, reply *PutAppendReply) {
 
 	kv.store[args.Key] = args.Value
 
-	kv.clientLog[args.ClientID] = &LogEntry{
-		SeqNum: args.SeqNum,
-		Value:  reply.Value,
-	}
+	kv.clientLog[args.ClientID].SeqNum = args.SeqNum
+	kv.clientLog[args.ClientID].Value = ""
 }
 
 func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
@@ -72,16 +68,15 @@ func (kv *KVServer) Append(args *PutAppendArgs, reply *PutAppendReply) {
 	kv.store[args.Key] = oldValue + args.Value
 	reply.Value = oldValue
 
-	kv.clientLog[args.ClientID] = &LogEntry{
-		SeqNum: args.SeqNum,
-		Value:  reply.Value,
-	}
+	kv.clientLog[args.ClientID].SeqNum = args.SeqNum
+	kv.clientLog[args.ClientID].Value = reply.Value
 }
 
-func (kv *KVServer) deduplicate(clientID, seqNum int64) (bool, string) {
+func (kv *KVServer) deduplicate(clientID int64, seqNum int) (bool, string) {
 	if log, ok := kv.clientLog[clientID]; ok && log.SeqNum == seqNum {
 		return true, log.Value
 	}
+	kv.clientLog[clientID] = &LogEntry{}
 	return false, ""
 }
 

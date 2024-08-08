@@ -10,7 +10,7 @@ import (
 type Clerk struct {
 	server     *labrpc.ClientEnd
 	id         int64
-	currSeqNum int64
+	currSeqNum int
 	// You will have to modify this struct.
 }
 
